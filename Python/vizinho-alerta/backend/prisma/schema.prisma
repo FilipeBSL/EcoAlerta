@@ -1,0 +1,326 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+enum UserRole {
+  citizen
+  leader
+  manager
+  admin
+}
+
+enum OccurrenceStatus {
+  open
+  analyzing
+  attending
+  resolved
+  archived
+}
+
+enum AlertSeverity {
+  green
+  yellow
+  orange
+  red
+}
+
+enum AlertType {
+  flood
+  fire
+  rain
+  landslide
+  infrastructure
+  health
+  other
+}
+
+enum AlertSource {
+  manual
+  inmet
+  system
+}
+
+enum EventType {
+  cleanup
+  meeting
+  workshop
+  other
+}
+
+enum NotificationType {
+  occurrence_update
+  alert
+  event
+  system
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+  critical
+}
+
+model User {
+  id              String    @id @default(uuid())
+  name            String    @db.VarChar(120)
+  email           String    @unique @db.VarChar(255)
+  phone           String?   @unique @db.VarChar(20)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  role            UserRole  @default(citizen)
+  neighborhoodId  String?   @map("neighborhood_id")
+  isActive        Boolean   @default(true) @map("is_active")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  fcmToken        String?   @map("fcm_token") @db.VarChar(512)
+  refreshToken    String?   @map("refresh_token") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  neighborhood         Neighborhood?          @relation(fields: [neighborhoodId], references: [id])
+  occurrences          Occurrence[]           @relation("OccurrenceAuthor")
+  confirmations        OccurrenceConfirmation[]
+  alerts               Alert[]                @relation("AlertCreator")
+  approvedAlerts       Alert[]                @relation("AlertApprover")
+  events               Event[]
+  eventRegistrations   EventRegistration[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  comments             Comment[]
+
+  @@map("users")
+}
+
+model Neighborhood {
+  id         String    @id @default(uuid())
+  name       String    @db.VarChar(100)
+  district   String    @db.VarChar(100)
+  city       String    @db.VarChar(80)
+  population Int?
+  riskLevel  RiskLevel @default(low) @map("risk_level")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  users       User[]
+  occurrences Occurrence[]
+  events      Event[]
+  alertAreas  AlertArea[]
+
+  @@map("neighborhoods")
+}
+
+model Category {
+  id           Int    @id @default(autoincrement())
+  name         String @db.VarChar(80)
+  slug         String @unique @db.VarChar(80)
+  icon         String? @db.VarChar(100)
+  baseSeverity Int    @default(1) @map("base_severity")
+  colorHex     String @default("#607D8B") @map("color_hex") @db.Char(7)
+
+  occurrences Occurrence[]
+
+  @@map("categories")
+}
+
+model Occurrence {
+  id                 String           @id @default(uuid())
+  protocol           String           @unique @db.VarChar(20)
+  userId             String           @map("user_id")
+  categoryId         Int              @map("category_id")
+  neighborhoodId     String           @map("neighborhood_id")
+  title              String           @db.VarChar(255)
+  description        String           @db.Text
+  latitude           Decimal          @db.Decimal(10, 8)
+  longitude          Decimal          @db.Decimal(11, 8)
+  address            String?          @db.VarChar(255)
+  status             OccurrenceStatus @default(open)
+  priorityScore      Decimal          @default(0) @map("priority_score") @db.Decimal(8, 2)
+  confirmationsCount Int              @default(0) @map("confirmations_count")
+  internalNotes      String?          @map("internal_notes") @db.Text
+  publicResponse     String?          @map("public_response") @db.Text
+  resolvedAt         DateTime?        @map("resolved_at")
+  archivedAt         DateTime?        @map("archived_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  user          User                     @relation("OccurrenceAuthor", fields: [userId], references: [id])
+  category      Category                 @relation(fields: [categoryId], references: [id])
+  neighborhood  Neighborhood             @relation(fields: [neighborhoodId], references: [id])
+  photos        OccurrencePhoto[]
+  confirmations OccurrenceConfirmation[]
+  comments      Comment[]
+  statusHistory OccurrenceStatusHistory[]
+
+  @@map("occurrences")
+}
+
+model OccurrencePhoto {
+  id               String   @id @default(uuid())
+  occurrenceId     String   @map("occurrence_id")
+  cloudinaryId     String   @map("cloudinary_id") @db.VarChar(255)
+  url              String   @db.Text
+  thumbnailUrl     String?  @map("thumbnail_url") @db.Text
+  originalFilename String?  @map("original_filename") @db.VarChar(255)
+  sizeBytes        Int?     @map("size_bytes")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  occurrence Occurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+
+  @@map("occurrence_photos")
+}
+
+model OccurrenceConfirmation {
+  id           String   @id @default(uuid())
+  occurrenceId String   @map("occurrence_id")
+  userId       String   @map("user_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  occurrence Occurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@unique([occurrenceId, userId])
+  @@map("occurrence_confirmations")
+}
+
+model OccurrenceStatusHistory {
+  id           String           @id @default(uuid())
+  occurrenceId String           @map("occurrence_id")
+  status       OccurrenceStatus
+  changedById  String?          @map("changed_by_id")
+  changedByName String?         @map("changed_by_name") @db.VarChar(120)
+  note         String?          @db.Text
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  occurrence Occurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+
+  @@map("occurrence_status_history")
+}
+
+model Alert {
+  id           String        @id @default(uuid())
+  createdById  String        @map("created_by")
+  approvedById String?       @map("approved_by")
+  title        String        @db.VarChar(255)
+  message      String        @db.Text
+  severity     AlertSeverity
+  type         AlertType
+  source       AlertSource   @default(manual)
+  isActive     Boolean       @default(true) @map("is_active")
+  startsAt     DateTime      @map("starts_at")
+  expiresAt    DateTime      @map("expires_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  createdBy     User           @relation("AlertCreator", fields: [createdById], references: [id])
+  approvedBy    User?          @relation("AlertApprover", fields: [approvedById], references: [id])
+  areas         AlertArea[]
+  notifications Notification[]
+
+  @@map("alerts")
+}
+
+model AlertArea {
+  id             String  @id @default(uuid())
+  alertId        String  @map("alert_id")
+  neighborhoodId String? @map("neighborhood_id")
+  radiusMeters   Int?    @map("radius_meters")
+  centerLat      Decimal? @map("center_lat") @db.Decimal(10, 8)
+  centerLng      Decimal? @map("center_lng") @db.Decimal(11, 8)
+
+  alert        Alert         @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  neighborhood Neighborhood? @relation(fields: [neighborhoodId], references: [id])
+
+  @@map("alert_areas")
+}
+
+model Event {
+  id               String    @id @default(uuid())
+  createdById      String    @map("created_by")
+  neighborhoodId   String    @map("neighborhood_id")
+  title            String    @db.VarChar(255)
+  description      String    @db.Text
+  type             EventType
+  locationText     String    @map("location_text") @db.VarChar(255)
+  latitude         Decimal   @db.Decimal(10, 8)
+  longitude        Decimal   @db.Decimal(11, 8)
+  maxVolunteers    Int?      @map("max_volunteers")
+  currentVolunteers Int      @default(0) @map("current_volunteers")
+  eventDate        DateTime  @map("event_date")
+  isCancelled      Boolean   @default(false) @map("is_cancelled")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  createdBy     User                @relation(fields: [createdById], references: [id])
+  neighborhood  Neighborhood        @relation(fields: [neighborhoodId], references: [id])
+  registrations EventRegistration[]
+  comments      Comment[]
+
+  @@map("events")
+}
+
+model EventRegistration {
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([eventId, userId])
+  @@map("event_registrations")
+}
+
+model Comment {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  body         String   @db.Text
+  occurrenceId String?  @map("occurrence_id")
+  eventId      String?  @map("event_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user       User        @relation(fields: [userId], references: [id])
+  occurrence Occurrence? @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  event      Event?      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  alertId   String?          @map("alert_id")
+  type      NotificationType
+  title     String           @db.VarChar(255)
+  body      String           @db.Text
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  sentAt    DateTime?        @map("sent_at")
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user  User   @relation(fields: [userId], references: [id])
+  alert Alert? @relation(fields: [alertId], references: [id])
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  action       String   @db.VarChar(100)
+  resourceType String   @map("resource_type") @db.VarChar(50)
+  resourceId   String?  @map("resource_id")
+  oldValue     Json?    @map("old_value")
+  newValue     Json?    @map("new_value")
+  ipAddress    String?  @map("ip_address") @db.VarChar(45)
+  userAgent    String?  @map("user_agent") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
